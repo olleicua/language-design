@@ -30,9 +30,7 @@ exports.word = function(word) {
         value: word,
         type: 'word',
         json: function() {
-            return (['js', 'macro-exists'].indexOf(this.value) !== -1) ?
-                'types.word("' + this.value + '")' :
-                this.value;
+            return 'types.word(\'' + this.value + '\')';
         }
     };
 };
@@ -72,9 +70,7 @@ exports.list = function(list) {
         }).join(', ') + ']';
     };
     list.slice = function() {
-        var args = [];
-        for (var i = 0; i < arguments.length; i++) args.push(arguments[i]);
-        return wrap([].slice.apply(this, args));
+        return wrap([].slice.apply(this, [].slice.call(arguments, 0)));
     };
     return list;
 };

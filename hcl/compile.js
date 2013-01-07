@@ -12,9 +12,57 @@ var macros = {};
 
 var built_ins = ['quote', 'quaziquote', 'unquote', 'js', 'macro-exists'];
 
+// replace word generations (e.g. 'types.word("foo")' with bare words if they
+// are defined as an argument in the macro or the mode is 'final-code'
+var resolve_words_in_scope = function(js, macro, mode) {
+    var words_in_scope = [];
+    if (macro) {
+        words_in_scope = macro[2].map(function(w) {
+            return w.value.replace('\.{3}$', '');
+        });
+    }
+    return js.replace(/types\.word\('([^']+)'\)/g, function(match, word) {
+        if (mode === 'final-code' || words_in_scope.indexOf(word) !== -1) {
+            return word;
+        } else {
+            return match;
+        }
+    });
+}
+
+// compile macro arguments
+var macro_args = function(macro, ast) {
+
+    var names = macro[2];
+    var values = ast.slice(1);
+
+    var result = [];
+    // FIXME: add support for splats in both directions
+    // TODO: throw a compile warning/error if arg_names and arg_values have
+    //       different lengths and there are no splats
+    args_loop: for (var i = 0; i < values.length && i < names.length; i++) {
+        
+        // splat
+        var splat = /^(.*)\.\.\.$/.exec(names[i].json());
+        //console.log(splat, arg_names[i].json());
+        if (splat) {
+            var splat_values = values.slice(i).map(function(x) {
+                return compile(x) ;
+            }).json() ;
+            result.push(template.format('~~ = "~~"',
+                                        [splat[0], splat_values])) ;
+            break args_loop ;
+        }
+        
+        result.push(template.format('~~ = "~~"',
+                                    [names[i].json(), compile(values[i])]));
+    }
+    return 'var ' +  result.join(', ') + ';';
+}
+
 // returns a copy of the ast with all macros applied to it.
 // calls apply_callback(macro, ast) after each successful macro application.
-var apply_macros = function(ast, apply_callback) {
+var apply_macros = function(ast, mode, apply_callback) {
 
     //console.log(ast.json());
     
@@ -26,7 +74,7 @@ var apply_macros = function(ast, apply_callback) {
     
     // recurse
     for (var i = 0; i < ast.length; i++) {
-        ast[i] = apply_macros(ast[i]);
+        ast[i] = apply_macros(ast[i], mode, apply_callback);
     }
     
     // apply macros
@@ -39,18 +87,11 @@ var apply_macros = function(ast, apply_callback) {
         //console.log(macro.map.call([1,2,3], function(x) { return x + 1; }).map(function(x) { return x.json(); }));
         //console.log('from', macros[ast[0].json()], macros[ast[0].json()].json());
         
-        // compile args
-        var arg_names = macro[2];
-        var arg_values = ast.slice(1);
-        var args = [];
-        // FIXME: add support for 'args...'
-        for (var i = 0; i < arg_values.length && i < arg_names.length; i++) {
-            args.push(template.format('~~ = "~~"', [arg_names[i].json(),
-                                                  compile(arg_values[i])]));
-        }
-        args = 'var ' +  args.join(', ') + ';';
+        var args = macro_args(macro, ast);
         
         // compile body
+        // TODO: replace all instances of words not defined in the args with
+        //       word generations
         var body = macro.slice(3);
         //console.log('b1', body.json());
         for (var i = 0; i < body.length; i++) {
@@ -59,12 +100,18 @@ var apply_macros = function(ast, apply_callback) {
 
         //body[body.length - 1] = 'return ' + body[body.length - 1];
         body = body.join('');
+        console.log('b', body);
+        body = resolve_words_in_scope(body, macro, mode);
+        console.log('a', body);
         
         if (typeof(apply_callback) === 'function') {
             apply_callback(macro, ast);
         }
         
         console.log('rewritten by', args + body);
+        console.log('rewritten to', eval(args + body));
+        console.log('rewritten to', types.list(eval(args + body)).json());
+        // FIXME: this needs better sandboxing
         return types.list(eval(args + body));
     }
     
@@ -169,7 +216,7 @@ exports.compile = function(text) {
         for (var i = 0; i < macro_names.length; i++) {
             var m = macro_names[i];
             // FIXME: macros should be applied to the body of the macro only
-            macros[m] = apply_macros(macros[m], function() {
+            macros[m] = apply_macros(macros[m], 'macro-expansion', function() {
                 macros_left_to_apply = true;
             });
         }
@@ -179,7 +226,7 @@ exports.compile = function(text) {
     for (var i = 0; i < asts.length; i++) {
         var ast = asts[i];
         if (ast[0].json() !== 'macro') {
-            compiled_statements.push(compile(apply_macros(asts[i])) + ';');
+            compiled_statements.push(resolve_words_in_scope(compile(apply_macros(asts[i], 'final-code')) + ';', null, 'final-code'));
         }
     }
     
